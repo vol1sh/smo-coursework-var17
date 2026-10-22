@@ -1,0 +1,191 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+
+title Диаграмма классов симулятора СМО (Вариант 17)\nАрхитектура вычислительной системы процессинга
+
+enum RequestStatus {
+  GENERATED
+  BUFFERED
+  IN_SERVICE
+  COMPLETED
+  DROPPED_D1OO4
+}
+
+enum EventType {
+  EVENT_GENERATE_REQUEST
+  EVENT_SERVICE_FINISH
+}
+
+class Request {
+  - id: int
+  - sourceId: int
+  - generationTime: double
+  - bufferEntryTime: double
+  - serviceStartTime: double
+  - serviceEndTime: double
+  - status: RequestStatus
+  + Request(id: int, sourceId: int, generationTime: double)
+  + getId(): int
+  + getSourceId(): int
+  + getGenerationTime(): double
+  + setBufferEntryTime(time: double): void
+  + getBufferEntryTime(): double
+  + setServiceStartTime(time: double): void
+  + setServiceEndTime(time: double): void
+  + setStatus(status: RequestStatus): void
+  + getStatus(): RequestStatus
+  + getWaitTime(): double
+  + getServiceTime(): double
+  + getTotalTime(): double
+}
+
+class Event {
+  - type: EventType
+  - eventTime: double
+  - entityId: int
+  - payload: Request
+  + Event(type: EventType, eventTime: double, entityId: int, payload: Request)
+  + getType(): EventType
+  + getEventTime(): double
+  + getEntityId(): int
+  + getPayload(): Request
+  + compareTo(other: Event): int
+}
+
+class EventCalendar {
+  - eventQueue: PriorityQueue<Event>
+  - currentTime: double
+  + EventCalendar()
+  + scheduleEvent(event: Event): void
+  + getNextEvent(): Event
+  + hasEvents(): boolean
+  + getCurrentTime(): double
+  + setCurrentTime(time: double): void
+}
+
+class Source {
+  - id: int
+  - lambda: double
+  - generatedCount: int
+  + Source(id: int, lambda: double)
+  + generateRequest(currentTime: double): Request
+  + calculateNextInterval(): double
+  + getId(): int
+  + getGeneratedCount(): int
+}
+
+class RingBuffer {
+  - capacity: int
+  - slots: Request[]
+  - writePointer: int
+  - readPointer: int
+  - currentSize: int
+  + RingBuffer(capacity: int)
+  + putRequest(request: Request): PutResult
+  + extractByRing(): Request
+  + isFull(): boolean
+  + isEmpty(): boolean
+  + getWritePointer(): int
+  + getReadPointer(): int
+  + getCurrentSize(): int
+  + getSlotsSnapshot(): Request[]
+  - findNewestIndex(): int
+}
+
+class Device {
+  - id: int
+  - tMin: double
+  - tMax: double
+  - isBusy: boolean
+  - currentRequest: Request
+  - totalBusyTime: double
+  - processedCount: int
+  + Device(id: int, tMin: double, tMax: double)
+  + startService(request: Request, currentTime: double): double
+  + finishService(currentTime: double): Request
+  + isBusy(): boolean
+  + getId(): int
+  + getTotalBusyTime(): double
+  + getProcessedCount(): int
+  + getCurrentRequest(): Request
+  - calculateServiceDuration(): double
+}
+
+class DeviceManager {
+  - devices: List<Device>
+  + DeviceManager(devices: List<Device>)
+  + getFreeDeviceByPriority(): Device
+  + getDeviceById(id: int): Device
+  + hasFreeDevice(): boolean
+  + getAllDevices(): List<Device>
+}
+
+class PutDispatcher {
+  - buffer: RingBuffer
+  - deviceManager: DeviceManager
+  - statsCollector: StatisticsCollector
+  + PutDispatcher(buffer: RingBuffer, devMgr: DeviceManager, stats: StatisticsCollector)
+  + putRequest(request: Request, currentTime: double): void
+}
+
+class SelectDispatcher {
+  - buffer: RingBuffer
+  - deviceManager: DeviceManager
+  - statsCollector: StatisticsCollector
+  + SelectDispatcher(buffer: RingBuffer, devMgr: DeviceManager, stats: StatisticsCollector)
+  + notifyDeviceFree(deviceId: int, currentTime: double): void
+}
+
+class StatisticsCollector {
+  - generatedBySource: Map<int, int>
+  - droppedBySource: Map<int, int>
+  - waitTimesBySource: Map<int, List<double>>
+  - serviceTimesBySource: Map<int, List<double>>
+  - totalSimulationTime: double
+  + StatisticsCollector()
+  + recordRequestGenerated(request: Request): void
+  + recordRequestBuffered(request: Request, slotIndex: int): void
+  + recordRequestDropped(request: Request, reason: String): void
+  + recordServiceStarted(request: Request, deviceId: int): void
+  + recordServiceFinished(request: Request, deviceId: int, currentTime: double): void
+  + getSummaryReportTable(): String
+}
+
+class SimulationController {
+  - calendar: EventCalendar
+  - sources: List<Source>
+  - buffer: RingBuffer
+  - deviceManager: DeviceManager
+  - putDispatcher: PutDispatcher
+  - selectDispatcher: SelectDispatcher
+  - statsCollector: StatisticsCollector
+  - totalRequestsTarget: int
+  + SimulationController(sourceLambdas: List<double>, bufCap: int, devParams: List<Pair>, totalReqs: int)
+  + runSimulation(): void
+  + stepSimulation(): boolean
+}
+
+SimulationController *-- EventCalendar
+SimulationController *-- RingBuffer
+SimulationController *-- DeviceManager
+SimulationController *-- PutDispatcher
+SimulationController *-- SelectDispatcher
+SimulationController *-- StatisticsCollector
+SimulationController o-- "1..*" Source
+
+PutDispatcher --> RingBuffer : "- buffer"
+PutDispatcher --> DeviceManager : "- deviceManager"
+PutDispatcher --> StatisticsCollector : "- statsCollector"
+
+SelectDispatcher --> RingBuffer : "- buffer"
+SelectDispatcher --> DeviceManager : "- deviceManager"
+SelectDispatcher --> StatisticsCollector : "- statsCollector"
+
+DeviceManager o-- "1..*" Device : "- devices"
+RingBuffer o-- "0..*" Request : "- slots[]"
+Device o-- "0..1" Request : "- currentRequest"
+EventCalendar o-- "0..*" Event : "- eventQueue"
+Event o-- "1" Request : "- payload"
+
+@enduml
