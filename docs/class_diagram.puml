@@ -1,8 +1,41 @@
 @startuml
 skinparam classAttributeIconSize 0
 skinparam linetype ortho
+skinparam nodesep 38
+skinparam ranksep 50
+hide empty members
+title Диаграмма классов СМО (вариант 17)\nРеальные классы и сигнатуры Java-модели Simulation
 
-title Диаграмма классов симулятора СМО (Вариант 17)\nАрхитектура вычислительной системы процессинга
+class Simulation {
+  - config: Config
+  - random: Random
+  - sources: Source[]
+  - buffer: RingBuffer
+  - manager: DeviceManager
+  - eventQueue: PriorityQueue<Event>
+  - statistics: StatisticsCollector
+  - putDispatcher: PutDispatcher
+  - selectDispatcher: SelectDispatcher
+  - time: double
+  - nextRequestId: int
+  - nextEventSerial: long
+  + Simulation(config: Config)
+  + step(): boolean
+  - schedule(type: EventType, at: double, sourceId: int, deviceId: int, slot: int, request: Request): void
+  + isFinished(): boolean
+  + checkInvariants(): void
+}
+
+class Config <<record>> {
+  + sources: int
+  + devices: int
+  + bufferSize: int
+  + lambda: double
+  + serviceMin: double
+  + serviceMax: double
+  + maxRequests: int
+  + seed: long
+}
 
 enum RequestStatus {
   GENERATED
@@ -13,179 +46,180 @@ enum RequestStatus {
 }
 
 enum EventType {
-  EVENT_GENERATE_REQUEST
-  EVENT_SERVICE_FINISH
+  GENERATE_REQUEST
+  ROUTE_REQUEST
+  PUT_BUFFER
+  DISPLACE_REQUEST
+  WRITE_REPLACEMENT
+  SELECT_BUFFER
+  START_SERVICE
+  SERVICE_FINISH
 }
 
 class Request {
   - id: int
   - sourceId: int
+  - sourceSequence: int
   - generationTime: double
   - bufferEntryTime: double
   - serviceStartTime: double
   - serviceEndTime: double
   - status: RequestStatus
-  + Request(id: int, sourceId: int, generationTime: double)
   + getId(): int
   + getSourceId(): int
-  + getGenerationTime(): double
-  + setBufferEntryTime(time: double): void
-  + getBufferEntryTime(): double
-  + setServiceStartTime(time: double): void
-  + setServiceEndTime(time: double): void
-  + setStatus(status: RequestStatus): void
   + getStatus(): RequestStatus
-  + getWaitTime(): double
-  + getServiceTime(): double
-  + getTotalTime(): double
+  + getGenerationTime(): double
+  + getBufferEntryTime(): double
+  + getServiceStartTime(): double
+  + getServiceEndTime(): double
+  + waitTime(): double
+  + serviceTime(): double
+  + totalTime(): double
+  + label(): String
 }
 
 class Event {
   - type: EventType
-  - eventTime: double
-  - entityId: int
-  - payload: Request
-  + Event(type: EventType, eventTime: double, entityId: int, payload: Request)
+  - time: double
+  - sourceId: int
+  - deviceId: int
+  - slot: int
+  - request: Request
+  - serial: long
   + getType(): EventType
-  + getEventTime(): double
-  + getEntityId(): int
-  + getPayload(): Request
+  + getTime(): double
+  + subject(): String
   + compareTo(other: Event): int
-}
-
-class EventCalendar {
-  - eventQueue: PriorityQueue<Event>
-  - currentTime: double
-  + EventCalendar()
-  + scheduleEvent(event: Event): void
-  + getNextEvent(): Event
-  + hasEvents(): boolean
-  + getCurrentTime(): double
-  + setCurrentTime(time: double): void
 }
 
 class Source {
   - id: int
   - lambda: double
   - generatedCount: int
-  + Source(id: int, lambda: double)
-  + generateRequest(currentTime: double): Request
-  + calculateNextInterval(): double
+  - nextGenerationTime: double
+  ~ generateRequest(globalId: int, currentTime: double): Request
+  ~ calculateNextInterval(random: Random): double
   + getId(): int
   + getGeneratedCount(): int
+  + getNextGenerationTime(): double
 }
 
 class RingBuffer {
-  - capacity: int
   - slots: Request[]
   - writePointer: int
   - readPointer: int
-  - currentSize: int
-  + RingBuffer(capacity: int)
-  + putRequest(request: Request): PutResult
-  + extractByRing(): Request
+  - size: int
+  + capacity(): int
+  + size(): int
   + isFull(): boolean
   + isEmpty(): boolean
   + getWritePointer(): int
   + getReadPointer(): int
-  + getCurrentSize(): int
-  + getSlotsSnapshot(): Request[]
-  - findNewestIndex(): int
+  + get(index: int): Request
+  + putRequest(request: Request, time: double): int
+  - insertAt(index: int, request: Request, time: double): void
+  + findNewestSlot(): int
+  + displaceNewest(index: int): Request
+  + writeReplacement(index: int, request: Request, time: double): void
+  + extractByRing(): Request
 }
 
 class Device {
   - id: int
-  - tMin: double
-  - tMax: double
-  - isBusy: boolean
   - currentRequest: Request
-  - totalBusyTime: double
-  - processedCount: int
-  + Device(id: int, tMin: double, tMax: double)
-  + startService(request: Request, currentTime: double): double
-  + finishService(currentTime: double): Request
-  + isBusy(): boolean
+  - finishTime: double
+  - busyTotal: double
+  - servicedCount: int
   + getId(): int
-  + getTotalBusyTime(): double
-  + getProcessedCount(): int
+  + isBusy(): boolean
   + getCurrentRequest(): Request
-  - calculateServiceDuration(): double
+  + getFinishTime(): double
+  + getServicedCount(): int
+  + utilization(time: double): double
+  ~ start(request: Request, start: double, duration: double): void
+  ~ finish(time: double): Request
 }
 
 class DeviceManager {
-  - devices: List<Device>
-  + DeviceManager(devices: List<Device>)
+  - devices: Device[]
   + getFreeDeviceByPriority(): Device
-  + getDeviceById(id: int): Device
-  + hasFreeDevice(): boolean
-  + getAllDevices(): List<Device>
+  + get(id: int): Device
+  + all(): List<Device>
+  + busyCount(): int
 }
 
 class PutDispatcher {
   - buffer: RingBuffer
-  - deviceManager: DeviceManager
-  - statsCollector: StatisticsCollector
-  + PutDispatcher(buffer: RingBuffer, devMgr: DeviceManager, stats: StatisticsCollector)
-  + putRequest(request: Request, currentTime: double): void
+  - manager: DeviceManager
+  - statistics: StatisticsCollector
+  ~ putRequest(request: Request): void
+  ~ bufferRequest(request: Request): void
+  ~ displace(incoming: Request, slot: int): void
+  ~ putReplacement(incoming: Request, slot: int): void
 }
 
 class SelectDispatcher {
   - buffer: RingBuffer
-  - deviceManager: DeviceManager
-  - statsCollector: StatisticsCollector
-  + SelectDispatcher(buffer: RingBuffer, devMgr: DeviceManager, stats: StatisticsCollector)
-  + notifyDeviceFree(deviceId: int, currentTime: double): void
+  - manager: DeviceManager
+  ~ selectAfterRelease(): void
 }
 
 class StatisticsCollector {
-  - generatedBySource: Map<int, int>
-  - droppedBySource: Map<int, int>
-  - waitTimesBySource: Map<int, List<double>>
-  - serviceTimesBySource: Map<int, List<double>>
-  - totalSimulationTime: double
-  + StatisticsCollector()
-  + recordRequestGenerated(request: Request): void
-  + recordRequestBuffered(request: Request, slotIndex: int): void
-  + recordRequestDropped(request: Request, reason: String): void
-  + recordServiceStarted(request: Request, deviceId: int): void
-  + recordServiceFinished(request: Request, deviceId: int, currentTime: double): void
-  + getSummaryReportTable(): String
+  - generated: int[]
+  - dropped: int[]
+  - completed: int[]
+  - waitTotal: double[]
+  - serviceTotal: double[]
+  - systemTotal: double[]
+  - totalGenerated: int
+  - totalDropped: int
+  - totalCompleted: int
+  ~ recordRequestGenerated(request: Request): void
+  ~ recordRequestDropped(request: Request): void
+  ~ recordServiceFinished(request: Request): void
+  + getTotalGenerated(): int
+  + getTotalDropped(): int
+  + getTotalCompleted(): int
+  + avgWait(index: int): double
+  + avgService(index: int): double
+  + avgSystem(index: int): double
+  + failurePercent(): double
 }
 
-class SimulationController {
-  - calendar: EventCalendar
-  - sources: List<Source>
-  - buffer: RingBuffer
-  - deviceManager: DeviceManager
-  - putDispatcher: PutDispatcher
-  - selectDispatcher: SelectDispatcher
-  - statsCollector: StatisticsCollector
-  - totalRequestsTarget: int
-  + SimulationController(sourceLambdas: List<double>, bufCap: int, devParams: List<Pair>, totalReqs: int)
-  + runSimulation(): void
-  + stepSimulation(): boolean
-}
+Simulation *-- "1" Config
+Simulation *-- "1..*" Source : sources[]
+Simulation *-- "1" RingBuffer : buffer
+Simulation *-- "1" DeviceManager : manager
+Simulation *-- "0..*" Event : eventQueue
+Simulation *-- "1" StatisticsCollector : statistics
+Simulation *-- "1" PutDispatcher : putDispatcher
+Simulation *-- "1" SelectDispatcher : selectDispatcher
 
-SimulationController *-- EventCalendar
-SimulationController *-- RingBuffer
-SimulationController *-- DeviceManager
-SimulationController *-- PutDispatcher
-SimulationController *-- SelectDispatcher
-SimulationController *-- StatisticsCollector
-SimulationController o-- "1..*" Source
+PutDispatcher --> RingBuffer : buffer
+PutDispatcher --> DeviceManager : manager
+PutDispatcher --> StatisticsCollector : statistics
+SelectDispatcher --> RingBuffer : buffer
+SelectDispatcher --> DeviceManager : manager
+DeviceManager *-- "1..*" Device : devices[]
+RingBuffer o-- "0..*" Request : slots[]
+Device --> "0..1" Request : currentRequest
+Event --> "0..1" Request : request
+Event --> EventType
+Request --> RequestStatus
 
-PutDispatcher --> RingBuffer : "- buffer"
-PutDispatcher --> DeviceManager : "- deviceManager"
-PutDispatcher --> StatisticsCollector : "- statsCollector"
-
-SelectDispatcher --> RingBuffer : "- buffer"
-SelectDispatcher --> DeviceManager : "- deviceManager"
-SelectDispatcher --> StatisticsCollector : "- statsCollector"
-
-DeviceManager o-- "1..*" Device : "- devices"
-RingBuffer o-- "0..*" Request : "- slots[]"
-Device o-- "0..1" Request : "- currentRequest"
-EventCalendar o-- "0..*" Event : "- eventQueue"
-Event o-- "1" Request : "- payload"
-
+note bottom of Simulation
+  В Java эти типы объявлены вложенными в Simulation.
+  Календарь событий — поле eventQueue, а не отдельный EventCalendar.
+  START_SERVICE и SERVICE_FINISH обрабатывает Simulation.step().
+end note
+note right of PutDispatcher
+  ДП запускается событием ROUTE_REQUEST.
+  Может направить заявку сразу на прибор (через START_SERVICE)
+  либо в буфер (через PUT_BUFFER).
+end note
+note right of SelectDispatcher
+  ДВ запускается событием SELECT_BUFFER
+  после освобождения прибора, если буфер не пуст.
+  Сначала выбирает свободный прибор, затем заявку из БП.
+end note
 @enduml

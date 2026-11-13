@@ -1,179 +1,184 @@
 @startuml
+hide footbox
 autonumber
+skinparam participantPadding 14
 skinparam BoxPadding 10
-skinparam ParticipantPadding 10
+skinparam maxMessageSize 125
+skinparam sequenceMessageAlign center
 
-title Сиквенс-диаграмма функционирования СМО (Вариант 17)\nФормула: ИБ | ИЗ1 | ПЗ2 | Д1ОЗ1 | Д1ОО4 | Д2П1 | Д2Б3 | ОР1 | ОД2
+title СМО, вариант 17 — сквозной сценарий: Happy Flow, переполнение, выборка\nИБ | ИЗ1 | ПЗ2 | Д1ОЗ1 | Д1ОО4 | Д2П1 | Д2Б3
 
-box "Событийный таймер" #LightYellow
-  control "Календарь событий\n(EventCalendar)" as Calendar
+box "Событийная модель" #FFF3DA
+  control "Simulation\n(календарь событий)" as Sim
 end box
-
-box "Входной поток" #LightCyan
-  participant "Источник заявок\n(Source ИБ)" as Source
+box "Источник" #E7F6FF
+  participant "Source\n(ИБ, ИЗ1)" as Src
 end box
-
-box "Диспетчеризация и память" #LightGreen
-  participant "Диспетчер постановки\n(PutDispatcher ДП)" as PutDisp
-  participant "Буферная память\n(RingBuffer БП)" as Buffer
-  participant "Диспетчер выбора\n(SelectDispatcher ДВ)" as SelDisp
+box "Диспетчеризация" #E4F4E9
+  participant "PutDispatcher\n(ДП)" as Put
+  participant "DeviceManager" as Mgr
+  participant "RingBuffer\n(БП)" as Buf
+  participant "SelectDispatcher\n(ДВ)" as Sel
 end box
-
-box "Вычислительные приборы" #Lavender
-  participant "Менеджер приборов\n(DeviceManager)" as DevMgr
-  participant "Прибор П1 (Основной)\n(Device P1)" as Dev1
-  participant "Прибор П2 (Вспомог.)\n(Device P2)" as Dev2
+box "Приборы" #F1E7FF
+  participant "Device P1" as P1
+  participant "Device P2" as P2
 end box
+participant "StatisticsCollector" as Stats #FBE8EC
 
-box "Аналитика" #MistyRose
-  participant "Сборщик статистики\n(StatisticsCollector)" as Stats
-end box
-
-== 1. Генерация заявки источником (ИБ, ИЗ1) ==
-
-Calendar -> Source: Наступило событие EVENT_GENERATE_REQUEST(sourceId, currentTime)
-activate Source
-note over Source
-  <b>Закон генерации ИЗ1</b>: Пуассоновский поток.
-  Интервал до следующей заявки:
-  dt = - (1 / lambda) * ln(R), R in (0, 1)
-end note
-Source -> Source: Создать Request(id, sourceId, currentTime)
-Source -> Calendar: scheduleEvent(EVENT_GENERATE_REQUEST, currentTime + dt)
-Calendar -->> Source: ACK (событие запланировано)
-
-Source -> PutDisp: putRequest(request, currentTime)
-activate PutDisp
-PutDisp -> Stats: recordRequestGenerated(request)
-Stats -->> PutDisp: ACK
-
-== 2. Проверка доступности приборов: Дисциплина Д2П1 ==
-
-note over PutDisp, DevMgr
-  <b>Дисциплина Д2П1</b>: Приоритет по номеру прибора.
-  Поиск свободного прибора всегда ведется строго с П1 к Пm.
+note over Sim,Stats
+  Пример трассы при ДВУХ приборах P1 и P2 и высокой нагрузке.
+  Модель обрабатывает события по времени из PriorityQueue<Event>.
+  В коде Simulation.step() внутренние действия тоже являются событиями.
+  Показанные ниже последовательные события могут иметь одно модельное время t.
+  Для m приборов Д2П1 проверяет P1, P2, ... Pm по возрастанию номеров.
 end note
 
-PutDisp -> DevMgr: getFreeDeviceByPriority()
-activate DevMgr
-DevMgr -> Dev1: isBusy()
-Dev1 -->> DevMgr: статус (true / false)
+== 1. Первая заявка: Happy Flow (P1 свободен) ==
+Sim -> Sim: step(): извлечь GENERATE_REQUEST из календаря
+Sim -> Src: generateRequest(nextRequestId, t)
+Src --> Sim: r1: Request
+Sim -> Stats: recordRequestGenerated(r1)
+Sim -> Src: calculateNextInterval(random)
+Src --> Sim: dt = -ln(1-U) / lambda
+note right of Src: ИБ — поток неограничен; ИЗ1 — экспоненциальные интервалы, U in [0,1)
+Sim -> Sim: schedule(GENERATE_REQUEST, t + dt)
+Sim -> Sim: schedule(ROUTE_REQUEST, t, r1)
+Sim -> Put: putRequest(r1)
+Put -> Mgr: getFreeDeviceByPriority()
+Mgr -> P1: isBusy()
+P1 --> Mgr: false
+Mgr --> Put: Device(P1)
+Put -> Sim: schedule(START_SERVICE, t, P1, r1)
+Sim -> Sim: обработать START_SERVICE; duration = tMin + U*(tMax-tMin)
+note right of Sim: ПЗ2: равномерное время обслуживания
+Sim -> P1: start(r1, t, duration)
+Sim -> Sim: schedule(SERVICE_FINISH, t + duration, P1, r1)
 
-alt СЦЕНАРИЙ А [Happy Flow: Прибор П1 свободен]
-  DevMgr -->> PutDisp: freeDevice = Device(P1)
-  PutDisp -> Dev1: startService(request, currentTime)
-  activate Dev1
-  note over Dev1
-    <b>Закон обслуживания ПЗ2</b>: Равномерный.
-    T_service = t_min + R * (t_max - t_min)
+== 2. Вторая заявка: P1 занят, но P2 свободен (Д2П1) ==
+Sim -> Sim: step(): извлечь следующий GENERATE_REQUEST
+Sim -> Src: generateRequest(nextRequestId, t)
+Src --> Sim: r2: Request
+Sim -> Stats: recordRequestGenerated(r2)
+Sim -> Src: calculateNextInterval(random)
+Src --> Sim: dt
+Sim -> Sim: schedule(GENERATE_REQUEST, t + dt)
+Sim -> Put: putRequest(r2)
+Put -> Mgr: getFreeDeviceByPriority()
+Mgr -> P1: isBusy()
+P1 --> Mgr: true
+Mgr -> P2: isBusy()
+P2 --> Mgr: false
+Mgr --> Put: Device(P2)
+Put -> Sim: schedule(START_SERVICE, t, P2, r2)
+Sim -> Sim: обработать START_SERVICE; duration по ПЗ2
+Sim -> P2: start(r2, t, duration)
+Sim -> Sim: schedule(SERVICE_FINISH, t + duration, P2, r2)
+
+== 3. Все приборы заняты: заполнение буфера по кольцу ==
+note over Sim,P2: Предположим, новые заявки поступают до завершения обслуживания r1 и r2.
+loop Каждая новая заявка, пока в БП есть свободная ячейка
+  Sim -> Src: generateRequest(nextRequestId, t)
+  Src --> Sim: r: Request
+  Sim -> Stats: recordRequestGenerated(r)
+  Sim -> Src: calculateNextInterval(random)
+  Src --> Sim: dt
+  Sim -> Sim: schedule(GENERATE_REQUEST, t + dt)
+  Sim -> Put: putRequest(r)
+  Put -> Mgr: getFreeDeviceByPriority()
+  Mgr -> P1: isBusy()
+  P1 --> Mgr: true
+  Mgr -> P2: isBusy()
+  P2 --> Mgr: true
+  Mgr --> Put: null (свободных приборов нет)
+  Put -> Sim: schedule(PUT_BUFFER, t, r)
+  Sim -> Put: bufferRequest(r)
+  Put -> Buf: isFull()
+  Buf --> Put: false
+  Put -> Buf: putRequest(r, t)
+  note right of Buf
+    Д1ОЗ1: искать свободную ячейку от writePointer по кольцу;
+    вставить r; writePointer = (slot + 1) mod Capacity.
+    Элементы очереди физически не сдвигаются.
   end note
-  Dev1 -> Calendar: scheduleEvent(EVENT_SERVICE_FINISH, P1, currentTime + T_service)
-  Calendar -->> Dev1: ACK (событие завершения запланировано)
-  Dev1 -->> PutDisp: Response(SERVICE_STARTED, P1, finishTime)
-  deactivate Dev1
-  PutDisp -> Stats: recordDirectService(request, P1)
-  Stats -->> PutDisp: ACK
-  PutDisp -->> Source: Response(ACCEPTED_DIRECT, P1)
-
-else СЦЕНАРИЙ B [Все приборы заняты -> Обращение в буфер]
-  DevMgr -> Dev2: isBusy()
-  Dev2 -->> DevMgr: статус = true (занят)
-  DevMgr -->> PutDisp: freeDevice = null (все заняты)
-  deactivate DevMgr
-
-  == 3. Постановка в буфер: Дисциплина Д1ОЗ1 (по кольцу) ==
-  note over PutDisp, Buffer
-    <b>Дисциплина Д1ОЗ1</b>: Запись в буфер «по кольцу».
-    Поиск свободного места начинается с указателя writePointer.
-    Сдвига очереди не происходит.
-  end note
-
-  PutDisp -> Buffer: putRequest(request)
-  activate Buffer
-
-  alt В буфере есть свободная ячейка
-    Buffer -> Buffer: Найти слот начиная с writePointer;\nПоместить заявку в слот;\nwritePointer = (foundSlot + 1) % Capacity
-    Buffer -->> PutDisp: Response(ENQUEUED, slotIndex, writePointer)
-    PutDisp -> Stats: recordRequestBuffered(request, slotIndex)
-    Stats -->> PutDisp: ACK
-    PutDisp -->> Source: Response(ACCEPTED_BUFFER, slotIndex)
-
-  else СЦЕНАРИЙ C [Буфер полон -> Дисциплина отказа Д1ОО4]
-    note over Buffer
-      Буфер переполнен (count == Capacity).
-      <b>Дисциплина Д1ОО4</b>: Отказ получает ПОСЛЕДНЯЯ
-      поступившая в буфер заявка (самая «свежая» по timeStamp).
-      Приборы НЕ отказывают — отказ происходит только в буфере!
-    end note
-    Buffer -> Buffer: findNewestRequestInBuffer() -> requestToDrop
-    Buffer -> Buffer: Заменить requestToDrop на новую заявку;\nОбновить указатель writePointer
-    Buffer -->> PutDisp: Response(DISPLACED_SUCCESS, droppedRequest, slotIndex)
-    deactivate Buffer
-
-    PutDisp -> Stats: recordRequestDropped(droppedRequest, REASON_DISPLACED_D1OO4)
-    Stats -->> PutDisp: ACK
-    PutDisp -> Stats: recordRequestBuffered(request, slotIndex)
-    Stats -->> PutDisp: ACK
-    PutDisp -->> Source: Response(ACCEPTED_WITH_DISPLACEMENT, droppedRequest)
-  end
-end
-deactivate PutDisp
-deactivate Source
-
-== 4. Освобождение прибора и выборка из буфера: Дисциплина Д2Б3 ==
-
-Calendar -> Dev1: Наступило событие EVENT_SERVICE_FINISH(P1, currentTime)
-activate Dev1
-Dev1 -> Stats: recordServiceFinished(finishedRequest, P1, currentTime)
-Stats -->> Dev1: ACK
-Dev1 -> Dev1: setBusy(false), currentRequest = null
-Dev1 -> SelDisp: notifyDeviceFree(P1, currentTime)
-activate SelDisp
-deactivate Dev1
-
-note over SelDisp, Buffer
-  <b>Триггерное событие</b>: Освобождение прибора П1.
-  <b>Дисциплина Д2Б3</b>: Выбор заявки из буфера «по кольцу».
-  Поиск занятого слота ведется циклически от readPointer.
-end note
-
-SelDisp -> Buffer: extractByRing()
-activate Buffer
-
-alt Буфер пуст (нет заявок на обслуживание)
-  Buffer -->> SelDisp: Response(BUFFER_EMPTY)
-  deactivate Buffer
-  note over SelDisp, Dev1
-    Прибор П1 остается в состоянии ожидания (IDLE).
-  end note
-  SelDisp -->> Dev1: setStatus(IDLE)
-
-else Буфер содержит заявки
-  Buffer -> Buffer: Найти первый занятый слот начиная с readPointer;\nИзвлечь request;\nreadPointer = (foundSlot + 1) % Capacity
-  Buffer -->> SelDisp: Response(EXTRACTED, request, readPointer)
-  deactivate Buffer
-
-  note over SelDisp, DevMgr
-    <b>Дисциплина Д2П1</b>: Назначение заявки на свободный прибор.
-    Проверка начинается с П1. Поскольку П1 только что освободился,
-    заявка назначается на приоритетный прибор П1.
-  end note
-
-  SelDisp -> DevMgr: getFreeDeviceByPriority()
-  activate DevMgr
-  DevMgr -->> SelDisp: freeDevice = Device(P1)
-  deactivate DevMgr
-
-  SelDisp -> Dev1: startService(request, currentTime)
-  activate Dev1
-  Dev1 -> Calendar: scheduleEvent(EVENT_SERVICE_FINISH, P1, currentTime + T_service)
-  Calendar -->> Dev1: ACK
-  Dev1 -->> SelDisp: Response(SERVICE_STARTED, P1)
-  deactivate Dev1
-
-  SelDisp -> Stats: recordServiceStartedFromBuffer(request, P1)
-  Stats -->> SelDisp: ACK
+  Buf --> Put: slotIndex
 end
 
-deactivate SelDisp
+== 4. Буфер полон: выбивание по Д1ОО4 ==
+Sim -> Src: generateRequest(nextRequestId, t)
+Src --> Sim: incoming: Request
+Sim -> Stats: recordRequestGenerated(incoming)
+Sim -> Src: calculateNextInterval(random)
+Src --> Sim: dt
+Sim -> Sim: schedule(GENERATE_REQUEST, t + dt)
+Sim -> Put: putRequest(incoming)
+Put -> Mgr: getFreeDeviceByPriority()
+Mgr -> P1: isBusy()
+P1 --> Mgr: true
+Mgr -> P2: isBusy()
+P2 --> Mgr: true
+Mgr --> Put: null
+Put -> Sim: schedule(PUT_BUFFER, t, incoming)
+Sim -> Put: bufferRequest(incoming)
+Put -> Buf: isFull()
+Buf --> Put: true
+Put -> Buf: findNewestSlot()
+Buf --> Put: slotIndex (последняя поступившая в БП заявка)
+Put -> Sim: schedule(DISPLACE_REQUEST, t, incoming, slotIndex)
+Sim -> Put: displace(incoming, slotIndex)
+Put -> Buf: displaceNewest(slotIndex)
+Buf --> Put: dropped: Request
+Put -> Stats: recordRequestDropped(dropped)
+note over Put,Buf
+  Д1ОО4: отказ получает dropped, а НЕ incoming.
+  Удаление и замена происходят как отдельные события модели.
+  Приборы не отказывают: они только заняты или свободны.
+end note
+Put -> Sim: schedule(WRITE_REPLACEMENT, t, incoming, slotIndex)
+Sim -> Put: putReplacement(incoming, slotIndex)
+Put -> Buf: writeReplacement(slotIndex, incoming, t)
+note right of Buf: Новая заявка занимает освободившийся слот; writePointer обновлён.
+
+== 5. Триггер ДВ: освобождение P2, затем обслуживание из БП ==
+note over Sim,P2: P1 остаётся занятым; по календарю наступает SERVICE_FINISH(P2).
+Sim -> Sim: step(): извлечь SERVICE_FINISH(P2, t)
+Sim -> P2: finish(t)
+P2 --> Sim: finished: Request
+Sim -> Stats: recordServiceFinished(finished)
+Sim -> Buf: isEmpty()
+Buf --> Sim: false
+alt Буфер содержит заявки
+  Sim -> Sim: schedule(SELECT_BUFFER, t)
+  Sim -> Sel: selectAfterRelease()
+  Sel -> Mgr: getFreeDeviceByPriority()
+  Mgr -> P1: isBusy()
+  P1 --> Mgr: true
+  Mgr -> P2: isBusy()
+  P2 --> Mgr: false
+  Mgr --> Sel: Device(P2)
+  Sel -> Buf: isEmpty()
+  Buf --> Sel: false
+  Sel -> Buf: extractByRing()
+  note right of Buf
+    Д2Б3: найти занятую ячейку от readPointer по кольцу;
+    забрать заявку и освободить слот;
+    readPointer = (slot + 1) mod Capacity.
+  end note
+  Buf --> Sel: selected: Request
+  Sel -> Sim: schedule(START_SERVICE, t, P2, selected)
+  Sim -> Sim: обработать START_SERVICE; duration по ПЗ2
+  Sim -> P2: start(selected, t, duration)
+  Sim -> Sim: schedule(SERVICE_FINISH, t + duration, P2, selected)
+else Буфер пуст (краевой случай)
+  note over Sim,Sel
+    Прибор остаётся свободным; событие SELECT_BUFFER не создаётся.
+    При следующей генерации ДП сможет выбрать его по Д2П1.
+  end note
+end
+
+== 6. Завершение модели ==
+loop Пока календарь не пуст
+  Sim -> Sim: step(): обработать ближайшее событие
+end
+Sim -> Sim: checkInvariants(); сформировать показатели ОР1 / отображение ОД2
 @enduml
